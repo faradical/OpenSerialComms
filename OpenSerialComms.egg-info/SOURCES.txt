@@ -1,0 +1,17 @@
+LICENSE
+README.md
+pyproject.toml
+./openserialcomms/__init__.py
+./openserialcomms/api.py
+./openserialcomms/cli.py
+./openserialcomms/tui.py
+OpenSerialComms.egg-info/PKG-INFO
+OpenSerialComms.egg-info/SOURCES.txt
+OpenSerialComms.egg-info/dependency_links.txt
+OpenSerialComms.egg-info/entry_points.txt
+OpenSerialComms.egg-info/requires.txt
+OpenSerialComms.egg-info/top_level.txt
+openserialcomms/__init__.py
+openserialcomms/api.py
+openserialcomms/cli.py
+openserialcomms/tui.py

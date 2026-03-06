@@ -1,0 +1,2 @@
+[console_scripts]
+osc = openserialcomms.cli:main
