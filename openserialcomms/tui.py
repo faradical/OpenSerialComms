@@ -57,7 +57,7 @@ class PortSelectionScreen(ModalScreen[dict[str, str] | None]):
                 with Horizontal(id="port-buttons"):
                     yield Button("Connect", id="port-connect", variant="primary")
                     yield Button("Cancel", id="port-cancel")
-        yield Static("OpenSerialComms 0.1.0", id="port-banner")
+        yield Static("OpenSerialComms 0.1.1", id="port-banner")
 
     def on_mount(self) -> None:
         lv = self.query_one("#port-list", ListView)
@@ -197,7 +197,7 @@ class OscApp(App[None]):
             with Horizontal(id="banner"):
                 yield Static("Connected to: <none>", id="banner-left")
                 yield Static(">msg port   |   help - list cmds", id="banner-middle")
-                yield Static("OpenSerialComms 0.1.0", id="banner-right")
+                yield Static("OpenSerialComms 0.1.1", id="banner-right")
         yield Footer()
 
     def on_mount(self) -> None:
