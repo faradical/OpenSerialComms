@@ -1,5 +1,7 @@
 # OpenSerialComms (OSC)
 
+Repository: https://github.com/faradical/OpenSerialComms
+
 OpenSerialComms is a Python package for serial communications with two interfaces:
 
 - API (`openserialcomms.connect`) for scripted use.
@@ -9,7 +11,17 @@ The API uses a fixed registry socket (`127.0.0.1:14563`) plus per-port write/str
 
 ## Installation
 
+From GitHub:
+
 ```bash
+pip install git+https://github.com/faradical/OpenSerialComms.git
+```
+
+From a local clone:
+
+```bash
+git clone https://github.com/faradical/OpenSerialComms.git
+cd OpenSerialComms
 pip install .
 ```
 
@@ -62,6 +74,11 @@ port.stream()
 - Serial URLs supported by `pyserial` (for example `loop://`) can be used.
 - Message stream history is retained in-memory until connection close, then purged.
 - Remote instances can stream/write through socket endpoints owned by the first process that opened a given port.
+
+## Contributing and Issues
+
+- Issues: https://github.com/faradical/OpenSerialComms/issues
+- Repository: https://github.com/faradical/OpenSerialComms
 
 ## License
 
