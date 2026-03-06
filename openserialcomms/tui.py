@@ -8,49 +8,89 @@ from typing import Any
 from textual import on
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.screen import ModalScreen, Screen
+from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Input, Label, ListItem, ListView, RichLog, Static
 
 from .api import SerialPort, connect, list_serial_ports
 
 COMMANDS: list[tuple[str, str, str]] = [
-    (">", "Write a message to the connected serial port.\n", ">hello world"),
-    ("help", "Open the help screen.\n", "help"),
-    ("clear", "Clear the visible message stream.\n", "clear"),
-    ("close", "Close the current serial connection.\n", "close"),
-    ("exit", "Close the serial connection and quit.\n", "exit"),
-    ("log \"path/to/file\"", "Start/continue logging stream history to file.\n", "log \"serial.log\""),
-    ("open <port>", "Open a new connection (only when disconnected).\n", "open COM5"),
-    ("run \"path/to/file\"", "Write file contents to the connected port.\n", "run \"commands.txt\""),
+    (">", "Write a message to the connected serial port.", ">hello world"),
+    ("help", "Open the help screen.", "help"),
+    ("clear", "Clear the visible message stream.", "clear"),
+    ("close", "Close the current serial connection.", "close"),
+    ("exit", "Close the serial connection and quit.", "exit"),
+    ("log \"path/to/file\"", "Start/continue logging stream history to file.", "log \"serial.log\""),
+    (
+        "open [<port>] [-baud <rate>] [-timeout <seconds>]",
+        "Open a new connection (only when disconnected). If <port> is omitted, open the selection screen.",
+        "open COM5 -baud 9600 -timeout 1",
+    ),
+    ("run \"path/to/file\"", "Write file contents to the connected port.", "run \"commands.txt\""),
 ]
 
 
-class PortSelectionScreen(ModalScreen[str | None]):
-    BINDINGS = [("escape", "dismiss_none", "Cancel")]
+class PortSelectionScreen(ModalScreen[dict[str, str] | None]):
+    BINDINGS = [
+        ("enter", "confirm", "Connect"),
+        ("escape", "dismiss_none", "Cancel"),
+    ]
 
-    def __init__(self, ports: list[str]) -> None:
+    def __init__(self, ports: list[str], baud: str | int = 115200, timeout: str | int | float = 1) -> None:
         super().__init__()
         self.ports = ports
+        self.default_baud = str(baud)
+        self.default_timeout = str(timeout)
 
     def compose(self) -> ComposeResult:
-        yield Static("Select a serial port to connect to:", id="port-title")
-        items = [ListItem(Label(f"[{port}]")) for port in self.ports]
-        yield ListView(*items, id="port-list")
+        yield Static("Select a serial port and configure settings:", id="port-title")
+        with Horizontal(id="port-body"):
+            with Vertical(id="port-list-block"):
+                yield Static("Available Ports", classes="block-title")
+                items = [ListItem(Label(port)) for port in self.ports]
+                yield ListView(*items, id="port-list")
+            with Vertical(id="port-settings-block"):
+                yield Static("Connection Settings", classes="block-title")
+                yield Static("Baudrate", classes="field-label")
+                yield Input(value=self.default_baud, id="port-baud")
+                yield Static("Timeout (seconds)", classes="field-label")
+                yield Input(value=self.default_timeout, id="port-timeout")
+                with Horizontal(id="port-buttons"):
+                    yield Button("Connect", id="port-connect", variant="primary")
+                    yield Button("Cancel", id="port-cancel")
         yield Static("OpenSerialComms 0.1.0", id="port-banner")
 
     def on_mount(self) -> None:
         lv = self.query_one("#port-list", ListView)
         if self.ports:
             lv.index = 0
+        lv.focus()
 
-    @on(ListView.Selected)
-    def on_selected(self, event: ListView.Selected) -> None:
-        if event.item is None:
-            self.dismiss(None)
-            return
-        text = event.item.query_one(Label).renderable
-        value = str(text).strip("[]")
-        self.dismiss(value)
+    def _selected_port(self) -> str | None:
+        if not self.ports:
+            return None
+        lv = self.query_one("#port-list", ListView)
+        idx = lv.index if lv.index is not None else 0
+        idx = max(0, min(idx, len(self.ports) - 1))
+        return self.ports[idx]
+
+    def _payload(self) -> dict[str, str] | None:
+        port = self._selected_port()
+        if port is None:
+            return None
+        baud = self.query_one("#port-baud", Input).value.strip() or self.default_baud
+        timeout = self.query_one("#port-timeout", Input).value.strip() or self.default_timeout
+        return {"port": port, "baud": baud, "timeout": timeout}
+
+    @on(Button.Pressed, "#port-connect")
+    def on_connect(self) -> None:
+        self.dismiss(self._payload())
+
+    @on(Button.Pressed, "#port-cancel")
+    def on_cancel(self) -> None:
+        self.dismiss(None)
+
+    def action_confirm(self) -> None:
+        self.dismiss(self._payload())
 
     def action_dismiss_none(self) -> None:
         self.dismiss(None)
@@ -71,7 +111,6 @@ class HelpScreen(ModalScreen[str | None]):
         lv = self.query_one("#help-list", ListView)
         if COMMANDS:
             lv.index = 0
-        # self.query_one("#select", Button).focus()
         lv.focus()
 
     def _selected_sample(self) -> str:
@@ -99,28 +138,41 @@ class OscApp(App[None]):
     #mid { height: 6; border: solid #444444; }
     #command-input { width: 2fr; }
     #command-output { width: 1fr; border: solid #444444; padding: 0 1; }
-    #banner { 
+    #banner {
         height: 3;
         border: solid #444444;
     }
-    #banner-left { 
+    #banner-left {
         content-align: left middle;
         width: 1fr;
         padding: 0 1;
     }
-    #banner-middle { 
+    #banner-middle {
         content-align: center middle;
         width: 1fr;
         padding: 0 1;
     }
-    #banner-right { 
+    #banner-right {
         content-align: right middle;
         width: 1fr;
         padding: 0 1;
     }
     #help-title, #port-title { height: 3; content-align: center middle; }
-    #help-list, #port-list { height: 1fr; border: solid #444444; }
+    #help-list { height: 1fr; border: solid #444444; }
     #help-buttons { height: 3; align: center middle; }
+
+    #port-body { height: 1fr; }
+    #port-list-block, #port-settings-block {
+        height: 1fr;
+        border: solid #444444;
+        padding: 0 1;
+    }
+    #port-list-block { width: 2fr; }
+    #port-settings-block { width: 1fr; }
+    #port-list { height: 1fr; }
+    .block-title { height: 1; content-align: left middle; }
+    .field-label { margin-top: 1; }
+    #port-buttons { height: 3; align: center middle; }
     #port-banner { height: 1; border: solid #444444; padding: 0 1; }
     """
 
@@ -129,8 +181,8 @@ class OscApp(App[None]):
     def __init__(self, port: str | None, baud: str | int, timeout: str | int | float) -> None:
         super().__init__()
         self.requested_port = port
-        self.baud = baud
-        self.timeout = timeout
+        self.baud = str(baud)
+        self.timeout = str(timeout)
         self.serial_port: SerialPort | None = None
         self.history: list[str] = []
         self.log_path: Path | None = None
@@ -158,11 +210,17 @@ class OscApp(App[None]):
         if not ports:
             self._set_output("No serial ports detected. Use 'open <port>' to connect.")
             return
-        self.push_screen(PortSelectionScreen(ports), self._on_port_selected)
+        self.push_screen(
+            PortSelectionScreen(ports, baud=self.baud, timeout=self.timeout),
+            self._on_port_selected,
+        )
 
-    def _on_port_selected(self, result: str | None) -> None:
-        if result:
-            self._open_port(result)
+    def _on_port_selected(self, result: dict[str, str] | None) -> None:
+        if not result:
+            return
+        self.baud = result["baud"]
+        self.timeout = result["timeout"]
+        self._open_port(result["port"])
 
     def _open_port(self, port: str) -> None:
         try:
@@ -172,7 +230,7 @@ class OscApp(App[None]):
             return
 
         self._set_banner(port)
-        self._set_output(f"Connected to {port}")
+        self._set_output(f"Connected to {port} (baud={self.baud}, timeout={self.timeout})")
         self._start_stream_thread()
 
     def _start_stream_thread(self) -> None:
@@ -221,9 +279,7 @@ class OscApp(App[None]):
 
     def _set_banner(self, port: str | None) -> None:
         current = port if port else "<none>"
-        self.query_one("#banner-left", Static).update(
-            f"Connected to: {current}"
-        )
+        self.query_one("#banner-left", Static).update(f"Connected to: {current}")
 
     @on(Input.Submitted, "#command-input")
     def on_command(self, event: Input.Submitted) -> None:
@@ -319,15 +375,53 @@ class OscApp(App[None]):
             self._set_output("Please close the current connection")
             return
 
-        if not args:
+        open_port: str | None = None
+        selected_baud = self.baud
+        selected_timeout = self.timeout
+
+        i = 0
+        while i < len(args):
+            token = args[i]
+            if token == "-baud":
+                i += 1
+                if i >= len(args):
+                    self._set_output("Usage: open [<port>] [-baud <rate>] [-timeout <seconds>]")
+                    return
+                selected_baud = args[i]
+                i += 1
+                continue
+            if token == "-timeout":
+                i += 1
+                if i >= len(args):
+                    self._set_output("Usage: open [<port>] [-baud <rate>] [-timeout <seconds>]")
+                    return
+                selected_timeout = args[i]
+                i += 1
+                continue
+            if token.startswith("-"):
+                self._set_output(f"Unknown option for open: {token}")
+                return
+            if open_port is not None:
+                self._set_output("Usage: open [<port>] [-baud <rate>] [-timeout <seconds>]")
+                return
+            open_port = token
+            i += 1
+
+        self.baud = selected_baud
+        self.timeout = selected_timeout
+
+        if not open_port:
             ports = list_serial_ports()
             if not ports:
                 self._set_output("No serial ports detected")
                 return
-            self.push_screen(PortSelectionScreen(ports), self._on_port_selected)
+            self.push_screen(
+                PortSelectionScreen(ports, baud=self.baud, timeout=self.timeout),
+                self._on_port_selected,
+            )
             return
 
-        self._open_port(args[0])
+        self._open_port(open_port)
 
     def _cmd_run(self, args: list[str]) -> None:
         if not self.serial_port:
@@ -349,3 +443,5 @@ class OscApp(App[None]):
 
 def run_osc_tui(port: str | None = None, baud: str | int = 115200, timeout: str | int | float = 1) -> None:
     OscApp(port=port, baud=baud, timeout=timeout).run()
+
+

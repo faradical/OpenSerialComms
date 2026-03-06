@@ -66,7 +66,7 @@ port.stream()
 - `close`: Close current connection.
 - `exit`: Close and quit.
 - `log "path/to/file"`: Start file logging and backfill existing history.
-- `open <port>`: Open a port when disconnected.
+- `open [<port>] [-baud <rate>] [-timeout <seconds>]`: Open a port when disconnected. If `<port>` is omitted, open the port selection screen using the provided or current settings.
 - `run "path/to/file"`: Send file contents to the current port.
 
 ## Notes
@@ -83,3 +83,4 @@ port.stream()
 ## License
 
 GNU General Public License v3.0. See `LICENSE`.
+
