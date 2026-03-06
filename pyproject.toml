@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "OpenSerialComms"
+version = "0.1.0"
+description = "Socket-coordinated serial communications API and TUI."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+  { name = "OpenSerialComms Contributors" }
+]
+keywords = ["serial", "pyserial", "textual", "tui", "communications"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Communications",
+  "Topic :: Software Development :: Libraries"
+]
+dependencies = [
+  "pyserial>=3.5",
+  "textual>=0.63.0"
+]
+
+[project.urls]
+Homepage = "https://github.com/faradical/OpenSerialComms"
+Repository = "https://github.com/faradical/OpenSerialComms"
+Issues = "https://github.com/faradical/OpenSerialComms/issues"
+
+[project.scripts]
+osc = "openserialcomms.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["openserialcomms*"]
