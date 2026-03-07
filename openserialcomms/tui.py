@@ -4,6 +4,7 @@ import shlex
 import threading
 from pathlib import Path
 from typing import Any
+from rich.text import Text
 
 from textual import on
 from textual.app import App, ComposeResult
@@ -25,7 +26,7 @@ COMMANDS: list[tuple[str, str, str]] = [
         "Open a new connection (only when disconnected). If <port> is omitted, open the selection screen.",
         "open COM5 -baud 9600 -timeout 1",
     ),
-    ("run \"path/to/file\"", "Write file contents to the connected port.", "run \"commands.txt\""),
+    ("run \"path/to/file\"", "Write file contents to the connected port.", "run \"commands.txt\""), #end
 ]
 
 
@@ -57,7 +58,7 @@ class PortSelectionScreen(ModalScreen[dict[str, str] | None]):
                 with Horizontal(id="port-buttons"):
                     yield Button("Connect", id="port-connect", variant="primary")
                     yield Button("Cancel", id="port-cancel")
-        yield Static("OpenSerialComms 0.1.1", id="port-banner")
+        yield Static("OpenSerialComms 0.1.2", id="port-banner")
 
     def on_mount(self) -> None:
         lv = self.query_one("#port-list", ListView)
@@ -100,7 +101,7 @@ class HelpScreen(ModalScreen[str | None]):
     BINDINGS = [("escape", "return_only", "Return")]
 
     def compose(self) -> ComposeResult:
-        items = [ListItem(Label(f"{cmd}\n  {desc}")) for cmd, desc, _ in COMMANDS]
+        items = [ListItem(Label(f"{cmd}\n   {desc}\n")) for cmd, desc, _ in COMMANDS]
         yield Static("OSC Commands", id="help-title")
         yield ListView(*items, id="help-list")
         with Horizontal(id="help-buttons"):
@@ -158,7 +159,11 @@ class OscApp(App[None]):
         padding: 0 1;
     }
     #help-title, #port-title { height: 3; content-align: center middle; }
-    #help-list { height: 1fr; border: solid #444444; }
+    #help-list { 
+        height: 1fr;
+        border: solid #444444;
+        padding: 1;
+    }
     #help-buttons { height: 3; align: center middle; }
 
     #port-body { height: 1fr; }
@@ -197,7 +202,7 @@ class OscApp(App[None]):
             with Horizontal(id="banner"):
                 yield Static("Connected to: <none>", id="banner-left")
                 yield Static(">msg port   |   help - list cmds", id="banner-middle")
-                yield Static("OpenSerialComms 0.1.1", id="banner-right")
+                yield Static("OpenSerialComms 0.1.2", id="banner-right")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -263,7 +268,7 @@ class OscApp(App[None]):
 
         self._append_history(payload)
         if payload.startswith("> "):
-            stream.write(f"[green]{payload}[/green]")
+            stream.write(Text(payload, style="green"))
         else:
             stream.write(payload)
 
@@ -306,6 +311,12 @@ class OscApp(App[None]):
 
         if cmd == "help":
             self.push_screen(HelpScreen(), self._on_help_selected)
+            return
+        if cmd == "diagnostics":
+            self.push_screen(
+                PortSelectionScreen(["Sample 1", "Sample 2", "Sample 3"], baud=self.baud, timeout=self.timeout),
+                self._on_port_selected,
+            )
             return
         if cmd == "clear":
             self.query_one("#stream", RichLog).clear()
@@ -443,5 +454,7 @@ class OscApp(App[None]):
 
 def run_osc_tui(port: str | None = None, baud: str | int = 115200, timeout: str | int | float = 1) -> None:
     OscApp(port=port, baud=baud, timeout=timeout).run()
+
+
 
 
