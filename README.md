@@ -28,7 +28,7 @@ pip install .
 ## CLI Usage
 
 ```bash
-osc -port "COM5" -baud "9600" -timeout 1
+osc -port "COM5" -baud "9600" -timeout 1 -newline "\r"
 ```
 
 Arguments:
@@ -36,6 +36,7 @@ Arguments:
 - `-port <serial-port>`: Serial port (if omitted, a selection screen is shown).
 - `-baud <baud-rate>`: Baud rate (default: `115200`).
 - `-timeout <seconds>`: Serial read timeout (default: `1`).
+- `-newline <chars>`: Default newline appended to writes, using escape sequences such as `"\r"` or `"\r\n"` (default: `"\r"`).
 - `-help`: Show help.
 
 ## API Usage
@@ -43,15 +44,15 @@ Arguments:
 ```python
 import openserialcomms as osc
 
-port = osc.connect("COM5", baudrate=115200, timeout=1)
-port.write("hello\n")
+port = osc.connect("COM5", baudrate=115200, timeout=1, newline="\r")
+port.write("hello")
 port.stream()
 ```
 
 ### Core API
 
-- `connect(port, baudrate=115200, timeout=1, ...) -> SerialPort`
-- `SerialPort.write(message="")`
+- `connect(port, baudrate=115200, timeout=1, newline=None, ...) -> SerialPort`
+- `SerialPort.write(message="", newline=None)`
 - `SerialPort.stream()`
 - `SerialPort.close()`
 - `SerialPort.iter_stream()` (event iterator)
@@ -60,13 +61,14 @@ port.stream()
 
 ## TUI Commands
 
-- `>message`: Write to current port.
+- `>message`: Write to current port using the current default newline.
 - `help`: Open help screen.
 - `clear`: Clear visible stream.
 - `close`: Close current connection.
 - `exit`: Close and quit.
+- `newline "<char>"`: Change the default newline for future writes.
 - `log "path/to/file"`: Start file logging and backfill existing history.
-- `open [<port>] [-baud <rate>] [-timeout <seconds>]`: Open a port when disconnected. If `<port>` is omitted, open the port selection screen using the provided or current settings.
+- `open [<port>] [-baud <rate>] [-timeout <seconds>] [-newline <char>]`: Open a port when disconnected. If `<port>` is omitted, open the port selection screen using the provided or current settings.
 - `run "path/to/file"`: Send file contents to the current port.
 
 ## Notes
@@ -74,6 +76,7 @@ port.stream()
 - Serial URLs supported by `pyserial` (for example `loop://`) can be used.
 - Message stream history is retained in-memory until connection close, then purged.
 - Remote instances can stream/write through socket endpoints owned by the first process that opened a given port.
+- If a `>` command ends with escaped newline text such as `\r`, `\n`, or `\r\n`, that suffix overrides the default newline for that write only.
 
 ## Contributing and Issues
 
@@ -83,4 +86,5 @@ port.stream()
 ## License
 
 GNU General Public License v3.0. See `LICENSE`.
+
 

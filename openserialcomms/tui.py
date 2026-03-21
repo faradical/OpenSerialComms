@@ -4,8 +4,8 @@ import shlex
 import threading
 from pathlib import Path
 from typing import Any
-from rich.text import Text
 
+from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -20,14 +20,47 @@ COMMANDS: list[tuple[str, str, str]] = [
     ("clear", "Clear the visible message stream.", "clear"),
     ("close", "Close the current serial connection.", "close"),
     ("exit", "Close the serial connection and quit.", "exit"),
+    ("newline \"<char>\"", "Change the default newline appended to future writes.", "newline \"\\r\\n\""),
     ("log \"path/to/file\"", "Start/continue logging stream history to file.", "log \"serial.log\""),
     (
-        "open [<port>] [-baud <rate>] [-timeout <seconds>]",
+        "open [<port>] [-baud <rate>] [-timeout <seconds>] [-newline <char>]",
         "Open a new connection (only when disconnected). If <port> is omitted, open the selection screen.",
-        "open COM5 -baud 9600 -timeout 1",
+        "open COM5 -baud 9600 -timeout 1 -newline \"\\r\"",
     ),
-    ("run \"path/to/file\"", "Write file contents to the connected port.", "run \"commands.txt\""), #end
+    ("run \"path/to/file\"", "Write file contents to the connected port.", "run \"commands.txt\""),
 ]
+
+
+def _decode_escape_sequences(value: str) -> str:
+    return bytes(value, "utf-8").decode("unicode_escape")
+
+
+def _format_newline_label(value: str | None) -> str:
+    if value is None:
+        return "<none>"
+    return value.encode("unicode_escape").decode("ascii")
+
+
+def _extract_inline_newline(message: str) -> tuple[str, str | None]:
+    newline_parts: list[str] = []
+
+    while message.endswith("\\r") or message.endswith("\\n"):
+        if message.endswith("\\r"):
+            newline_parts.append("\r")
+            message = message[:-2]
+        else:
+            newline_parts.append("\n")
+            message = message[:-2]
+
+    while message.endswith("\r") or message.endswith("\n"):
+        newline_parts.append(message[-1])
+        message = message[:-1]
+
+    if not newline_parts:
+        return message, None
+
+    newline_parts.reverse()
+    return message, "".join(newline_parts)
 
 
 class PortSelectionScreen(ModalScreen[dict[str, str] | None]):
@@ -36,11 +69,18 @@ class PortSelectionScreen(ModalScreen[dict[str, str] | None]):
         ("escape", "dismiss_none", "Cancel"),
     ]
 
-    def __init__(self, ports: list[str], baud: str | int = 115200, timeout: str | int | float = 1) -> None:
+    def __init__(
+        self,
+        ports: list[str],
+        baud: str | int = 115200,
+        timeout: str | int | float = 1,
+        newline: str = "\\r",
+    ) -> None:
         super().__init__()
         self.ports = ports
         self.default_baud = str(baud)
         self.default_timeout = str(timeout)
+        self.default_newline = newline
 
     def compose(self) -> ComposeResult:
         yield Static("Select a serial port and configure settings:", id="port-title")
@@ -55,10 +95,12 @@ class PortSelectionScreen(ModalScreen[dict[str, str] | None]):
                 yield Input(value=self.default_baud, id="port-baud")
                 yield Static("Timeout (seconds)", classes="field-label")
                 yield Input(value=self.default_timeout, id="port-timeout")
+                yield Static("Newline Char", classes="field-label")
+                yield Input(value=self.default_newline, id="port-newline")
                 with Horizontal(id="port-buttons"):
                     yield Button("Connect", id="port-connect", variant="primary")
                     yield Button("Cancel", id="port-cancel")
-        yield Static("OpenSerialComms 0.1.2", id="port-banner")
+        yield Static("OpenSerialComms 0.1.3", id="port-banner")
 
     def on_mount(self) -> None:
         lv = self.query_one("#port-list", ListView)
@@ -80,7 +122,8 @@ class PortSelectionScreen(ModalScreen[dict[str, str] | None]):
             return None
         baud = self.query_one("#port-baud", Input).value.strip() or self.default_baud
         timeout = self.query_one("#port-timeout", Input).value.strip() or self.default_timeout
-        return {"port": port, "baud": baud, "timeout": timeout}
+        newline = self.query_one("#port-newline", Input).value or self.default_newline
+        return {"port": port, "baud": baud, "timeout": timeout, "newline": newline}
 
     @on(Button.Pressed, "#port-connect")
     def on_connect(self) -> None:
@@ -137,8 +180,13 @@ class OscApp(App[None]):
     Screen { layout: vertical; }
     #stream { height: 1fr; border: solid #444444; }
     #mid { height: 6; border: solid #444444; }
-    #command-input { width: 2fr; }
-    #command-output { width: 1fr; border: solid #444444; padding: 0 1; }
+    #command-input {
+        width: 2fr;
+    }
+    #command-output {
+        width: 1fr;
+        border: solid #444444;
+    }
     #banner {
         height: 3;
         border: solid #444444;
@@ -159,7 +207,7 @@ class OscApp(App[None]):
         padding: 0 1;
     }
     #help-title, #port-title { height: 3; content-align: center middle; }
-    #help-list { 
+    #help-list {
         height: 1fr;
         border: solid #444444;
         padding: 1;
@@ -183,11 +231,12 @@ class OscApp(App[None]):
 
     BINDINGS = [("ctrl+c", "quit", "Quit")]
 
-    def __init__(self, port: str | None, baud: str | int, timeout: str | int | float) -> None:
+    def __init__(self, port: str | None, baud: str | int, timeout: str | int | float, newline: str) -> None:
         super().__init__()
         self.requested_port = port
         self.baud = str(baud)
         self.timeout = str(timeout)
+        self.newline = newline
         self.serial_port: SerialPort | None = None
         self.history: list[str] = []
         self.log_path: Path | None = None
@@ -202,7 +251,7 @@ class OscApp(App[None]):
             with Horizontal(id="banner"):
                 yield Static("Connected to: <none>", id="banner-left")
                 yield Static(">msg port   |   help - list cmds", id="banner-middle")
-                yield Static("OpenSerialComms 0.1.2", id="banner-right")
+                yield Static("OpenSerialComms 0.1.3", id="banner-right")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -216,26 +265,35 @@ class OscApp(App[None]):
             self._set_output("No serial ports detected. Use 'open <port>' to connect.")
             return
         self.push_screen(
-            PortSelectionScreen(ports, baud=self.baud, timeout=self.timeout),
+            PortSelectionScreen(ports, baud=self.baud, timeout=self.timeout, newline=self.newline),
             self._on_port_selected,
         )
+
+    def _call_ui_thread(self, callback: Any, *args: Any) -> None:
+        try:
+            self.call_from_thread(callback, *args)
+        except RuntimeError:
+            return
 
     def _on_port_selected(self, result: dict[str, str] | None) -> None:
         if not result:
             return
         self.baud = result["baud"]
         self.timeout = result["timeout"]
+        self.newline = result["newline"]
         self._open_port(result["port"])
 
     def _open_port(self, port: str) -> None:
         try:
-            self.serial_port = connect(port, baudrate=self.baud, timeout=self.timeout)
+            self.serial_port = connect(port, baudrate=self.baud, timeout=self.timeout, newline=self.newline)
         except Exception as exc:
             self._set_output(f"Failed to open {port}: {exc}")
             return
 
         self._set_banner(port)
-        self._set_output(f"Connected to {port} (baud={self.baud}, timeout={self.timeout})")
+        self._set_output(
+            f"Connected to {port} (baud={self.baud}, timeout={self.timeout}, newline={self.newline})"
+        )
         self._start_stream_thread()
 
     def _start_stream_thread(self) -> None:
@@ -245,9 +303,10 @@ class OscApp(App[None]):
         def worker(sp: SerialPort) -> None:
             try:
                 for event in sp.iter_stream():
-                    self.call_from_thread(self._handle_stream_event, event)
+                    self._call_ui_thread(self._handle_stream_event, event)
             except Exception as exc:
-                self.call_from_thread(self._set_output, f"Stream closed: {exc}")
+                if self.serial_port is sp:
+                    self._call_ui_thread(self._set_output, f"Stream closed: {exc}")
 
         self._stream_thread = threading.Thread(target=worker, args=(self.serial_port,), daemon=True)
         self._stream_thread.start()
@@ -258,6 +317,15 @@ class OscApp(App[None]):
         if event_type == "sys" and event.get("event") == "closed":
             self._append_history("[sys] connection closed")
             stream.write("[sys] connection closed")
+            self.serial_port = None
+            self._set_banner(None)
+            return
+
+        if event_type == "sys" and event.get("event") == "error":
+            payload = str(event.get("payload", "stream error"))
+            self._append_history(f"[sys] error: {payload}")
+            stream.write(f"[sys] error: {payload}")
+            self._set_output(f"Stream error: {payload}")
             self.serial_port = None
             self._set_banner(None)
             return
@@ -288,15 +356,20 @@ class OscApp(App[None]):
 
     @on(Input.Submitted, "#command-input")
     def on_command(self, event: Input.Submitted) -> None:
-        raw = event.value.strip()
+        entered = event.value
         event.input.value = ""
-        if not raw:
+        if not entered.strip():
             return
 
-        if raw.startswith(">"):
-            self._cmd_write(raw[1:].lstrip())
+        if entered.startswith(">"):
+            message = entered[1:]
+            if message.startswith(" "):
+                message = message[1:]
+            message, inline_newline = _extract_inline_newline(message)
+            self._cmd_write(message, inline_newline)
             return
 
+        raw = entered.strip()
         try:
             parts = shlex.split(raw)
         except ValueError as exc:
@@ -314,7 +387,7 @@ class OscApp(App[None]):
             return
         if cmd == "diagnostics":
             self.push_screen(
-                PortSelectionScreen(["Sample 1", "Sample 2", "Sample 3"], baud=self.baud, timeout=self.timeout),
+                PortSelectionScreen(["Sample 1", "Sample 2", "Sample 3"], baud=self.baud, timeout=self.timeout, newline=self.newline),
                 self._on_port_selected,
             )
             return
@@ -327,6 +400,9 @@ class OscApp(App[None]):
             return
         if cmd == "exit":
             self._cmd_exit()
+            return
+        if cmd == "newline":
+            self._cmd_newline(args)
             return
         if cmd == "log":
             self._cmd_log(args)
@@ -345,12 +421,15 @@ class OscApp(App[None]):
         prompt.value = sample or ""
         prompt.focus()
 
-    def _cmd_write(self, message: str) -> None:
+    def _cmd_write(self, message: str, newline: str | None = None) -> None:
         if not self.serial_port:
             self._set_output("No active port")
             return
-        self.serial_port.write(message)
-        self._set_output("Message queued")
+        self.serial_port.write(message, newline=newline)
+        if newline is None:
+            self._set_output(f"Message queued with newline {self.newline}")
+        else:
+            self._set_output(f"Message queued with inline newline {_format_newline_label(newline)}")
 
     def _cmd_close(self) -> None:
         if not self.serial_port:
@@ -368,6 +447,20 @@ class OscApp(App[None]):
         if self.serial_port:
             self.serial_port.close()
         self.exit()
+
+    def _cmd_newline(self, args: list[str]) -> None:
+        if len(args) != 1:
+            self._set_output('Usage: newline "<char>"')
+            return
+        try:
+            decoded = _decode_escape_sequences(args[0])
+        except UnicodeDecodeError as exc:
+            self._set_output(f"Invalid newline value: {exc}")
+            return
+        self.newline = args[0]
+        if self.serial_port is not None:
+            self.serial_port.default_newline = decoded
+        self._set_output(f"Default newline set to {_format_newline_label(decoded)}")
 
     def _cmd_log(self, args: list[str]) -> None:
         if len(args) != 1:
@@ -389,6 +482,7 @@ class OscApp(App[None]):
         open_port: str | None = None
         selected_baud = self.baud
         selected_timeout = self.timeout
+        selected_newline = self.newline
 
         i = 0
         while i < len(args):
@@ -396,7 +490,7 @@ class OscApp(App[None]):
             if token == "-baud":
                 i += 1
                 if i >= len(args):
-                    self._set_output("Usage: open [<port>] [-baud <rate>] [-timeout <seconds>]")
+                    self._set_output("Usage: open [<port>] [-baud <rate>] [-timeout <seconds>] [-newline <char>]")
                     return
                 selected_baud = args[i]
                 i += 1
@@ -404,22 +498,31 @@ class OscApp(App[None]):
             if token == "-timeout":
                 i += 1
                 if i >= len(args):
-                    self._set_output("Usage: open [<port>] [-baud <rate>] [-timeout <seconds>]")
+                    self._set_output("Usage: open [<port>] [-baud <rate>] [-timeout <seconds>] [-newline <char>]")
                     return
                 selected_timeout = args[i]
+                i += 1
+                continue
+            if token == "-newline":
+                i += 1
+                if i >= len(args):
+                    self._set_output("Usage: open [<port>] [-baud <rate>] [-timeout <seconds>] [-newline <char>]")
+                    return
+                selected_newline = args[i]
                 i += 1
                 continue
             if token.startswith("-"):
                 self._set_output(f"Unknown option for open: {token}")
                 return
             if open_port is not None:
-                self._set_output("Usage: open [<port>] [-baud <rate>] [-timeout <seconds>]")
+                self._set_output("Usage: open [<port>] [-baud <rate>] [-timeout <seconds>] [-newline <char>]")
                 return
             open_port = token
             i += 1
 
         self.baud = selected_baud
         self.timeout = selected_timeout
+        self.newline = selected_newline
 
         if not open_port:
             ports = list_serial_ports()
@@ -427,7 +530,7 @@ class OscApp(App[None]):
                 self._set_output("No serial ports detected")
                 return
             self.push_screen(
-                PortSelectionScreen(ports, baud=self.baud, timeout=self.timeout),
+                PortSelectionScreen(ports, baud=self.baud, timeout=self.timeout, newline=self.newline),
                 self._on_port_selected,
             )
             return
@@ -452,9 +555,10 @@ class OscApp(App[None]):
         self._set_output(f"Sent {len(data)} bytes from {path}")
 
 
-def run_osc_tui(port: str | None = None, baud: str | int = 115200, timeout: str | int | float = 1) -> None:
-    OscApp(port=port, baud=baud, timeout=timeout).run()
-
-
-
-
+def run_osc_tui(
+    port: str | None = None,
+    baud: str | int = 115200,
+    timeout: str | int | float = 1,
+    newline: str = "\\r",
+) -> None:
+    OscApp(port=port, baud=baud, timeout=timeout, newline=newline).run()

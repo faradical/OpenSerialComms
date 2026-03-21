@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Generator
 
 import serial
-from serial import SerialException
+from serial import SerialException, SerialTimeoutException
 from serial.tools import list_ports
 
 REGISTRY_HOST = "127.0.0.1"
@@ -18,6 +18,10 @@ REGISTRY_PORT = 14563
 SOCKET_BACKLOG = 16
 
 _CLOSE_MARKER = "__OSC_CLOSE__"
+
+
+def _decode_escaped_text(value: str) -> str:
+    return bytes(value, "utf-8").decode("unicode_escape")
 
 
 def _to_int(value: Any, default: int) -> int:
@@ -219,7 +223,7 @@ class _OwnedEndpoint:
         self.stream_port = _get_free_port()
 
         self._closed = threading.Event()
-        self._write_queue: queue.Queue[str] = queue.Queue()
+        self._write_queue: queue.Queue[tuple[str, str | None] | str] = queue.Queue()
         self._stream_clients: list[socket.socket] = []
         self._clients_lock = threading.Lock()
         self._server_sockets: list[socket.socket] = []
@@ -275,7 +279,10 @@ class _OwnedEndpoint:
             cmd = req.get("cmd")
             if cmd == "write":
                 message = str(req.get("message", ""))
-                self._write_queue.put(message)
+                newline = req.get("newline")
+                if newline is not None:
+                    newline = str(newline)
+                self._write_queue.put((message, newline))
                 return
             if cmd == "close":
                 self._write_queue.put(_CLOSE_MARKER)
@@ -311,26 +318,31 @@ class _OwnedEndpoint:
 
     def _io_loop(self) -> None:
         while not self._closed.is_set():
-            # Drain queued outbound writes first.
-            while not self._write_queue.empty():
-                message = self._write_queue.get_nowait()
-                if message == _CLOSE_MARKER:
-                    self._broadcast({"type": "sys", "event": "closed", "port": self.port})
-                    self.shutdown()
-                    return
-                data = message.encode("utf-8")
-                self.serial.write(data)
-                self._broadcast({"type": "data", "direction": "out", "payload": f"> {message}"})
+            try:
+                while not self._write_queue.empty():
+                    request = self._write_queue.get_nowait()
+                    if request == _CLOSE_MARKER:
+                        self._broadcast({"type": "sys", "event": "closed", "port": self.port})
+                        self.shutdown()
+                        return
+                    message, newline = request
+                    payload = message if newline is None else message + newline
+                    self.serial.write(payload.encode("utf-8"))
+                    self._broadcast({"type": "data", "direction": "out", "payload": f"> {payload}"})
 
-            incoming = self.serial.readline()
-            if incoming:
-                decoded = incoming.decode("utf-8", errors="replace").rstrip("\r\n")
-                self._broadcast({"type": "data", "direction": "in", "payload": decoded})
-            else:
-                time.sleep(0.02)
+                incoming = self.serial.readline()
+                if incoming:
+                    decoded = incoming.decode("utf-8", errors="replace").rstrip("\r\n")
+                    self._broadcast({"type": "data", "direction": "in", "payload": decoded})
+                else:
+                    time.sleep(0.02)
+            except (OSError, SerialException, SerialTimeoutException) as exc:
+                self._broadcast({"type": "sys", "event": "error", "port": self.port, "payload": str(exc)})
+                self.shutdown()
+                return
 
-    def send_write(self, message: str) -> None:
-        self._write_queue.put(message)
+    def send_write(self, message: str, newline: str | None = None) -> None:
+        self._write_queue.put((message, newline))
 
     def send_close(self) -> None:
         self._write_queue.put(_CLOSE_MARKER)
@@ -341,7 +353,7 @@ class _OwnedEndpoint:
         self._closed.set()
         try:
             self.serial.close()
-        except OSError:
+        except (OSError, SerialException):
             pass
 
         for server in self._server_sockets:
@@ -402,12 +414,14 @@ class SerialPort:
         stream_port: int,
         owns_serial: bool,
         endpoint: _OwnedEndpoint | None,
+        default_newline: str | None,
     ) -> None:
         self.port = port
         self.write_port = write_port
         self.stream_port = stream_port
         self.owns_serial = owns_serial
         self._endpoint = endpoint
+        self.default_newline = default_newline
 
         SerialPort.known_ports[port] = {
             "write_port": write_port,
@@ -415,15 +429,16 @@ class SerialPort:
             "owns_serial": owns_serial,
         }
 
-    def write(self, message: str = "") -> None:
+    def write(self, message: str = "", newline: str | None = None) -> None:
         if message == "":
             return
+        resolved_newline = self.default_newline if newline is None else newline
         if self.owns_serial and self._endpoint is not None:
-            self._endpoint.send_write(message)
+            self._endpoint.send_write(message, resolved_newline)
             return
 
         with socket.create_connection((REGISTRY_HOST, self.write_port), timeout=1.0) as sock:
-            _send_json(sock, {"cmd": "write", "message": message})
+            _send_json(sock, {"cmd": "write", "message": message, "newline": resolved_newline})
 
     def iter_stream(self) -> Generator[dict[str, Any], None, None]:
         with socket.create_connection((REGISTRY_HOST, self.stream_port), timeout=1.0) as sock:
@@ -434,6 +449,8 @@ class SerialPort:
                     chunk = sock.recv(4096)
                 except socket.timeout:
                     continue
+                except OSError:
+                    return
                 if not chunk:
                     break
                 carry += chunk
@@ -462,14 +479,18 @@ class SerialPort:
             self._endpoint.send_close()
             return
 
-        with socket.create_connection((REGISTRY_HOST, self.write_port), timeout=1.0) as sock:
-            _send_json(sock, {"cmd": "close"})
+        try:
+            with socket.create_connection((REGISTRY_HOST, self.write_port), timeout=1.0) as sock:
+                _send_json(sock, {"cmd": "close"})
+        except OSError:
+            return
 
 
 def connect(
     port: str,
     baudrate: int | str = 115200,
     timeout: float | int | str | None = 1,
+    newline: str | None = None,
     bytesize: int = serial.EIGHTBITS,
     parity: str = serial.PARITY_NONE,
     stopbits: float = serial.STOPBITS_ONE,
@@ -481,6 +502,7 @@ def connect(
 
     port = str(port)
     _ensure_registry()
+    resolved_newline = _decode_escaped_text(newline) if newline is not None else None
 
     existing = _lookup_port(port)
     if existing is not None:
@@ -490,6 +512,7 @@ def connect(
             stream_port=existing.stream_port,
             owns_serial=False,
             endpoint=None,
+            default_newline=resolved_newline,
         )
 
     baud = _to_int(baudrate, 115200)
@@ -508,7 +531,6 @@ def connect(
             dsrdtr=dsrdtr,
         )
     except SerialException:
-        # Another process may have won the race; re-check registry.
         existing_after = _lookup_port(port)
         if existing_after is not None:
             return SerialPort(
@@ -517,6 +539,7 @@ def connect(
                 stream_port=existing_after.stream_port,
                 owns_serial=False,
                 endpoint=None,
+                default_newline=resolved_newline,
             )
         raise
 
@@ -529,7 +552,6 @@ def connect(
 
     if not _register_port(record):
         endpoint.shutdown()
-        # Registry changed while opening; attach as proxy if now available.
         existing_after = _lookup_port(port)
         if existing_after is not None:
             return SerialPort(
@@ -538,6 +560,7 @@ def connect(
                 stream_port=existing_after.stream_port,
                 owns_serial=False,
                 endpoint=None,
+                default_newline=resolved_newline,
             )
         raise RuntimeError("Failed to register opened serial port")
 
@@ -550,6 +573,7 @@ def connect(
         stream_port=endpoint.stream_port,
         owns_serial=True,
         endpoint=endpoint,
+        default_newline=resolved_newline,
     )
 
 
@@ -577,3 +601,4 @@ def _cleanup() -> None:
 
 
 atexit.register(_cleanup)
+
